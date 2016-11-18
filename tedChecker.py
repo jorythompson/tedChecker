@@ -8,6 +8,10 @@ import locale
 import xml.etree.ElementTree as ET
 import dominate.tags as tags
 import platform
+import traceback
+import sys
+import logging
+import logging.handlers
 
 ########################################################################################################################
 # put a script into /etc/cron.daily (or under /etc/cron.X) and run the following to verify:
@@ -49,7 +53,7 @@ class MTU:
         self.power_mtd = {"val": float(mtu.find("PowerMTD").text),
                           "help": "Cumulative Power since the beginning of the billing cycle"}
         self.power_avg = {"val": float(mtu.find("PowerAvg").text),
-                      "help": "The average daily power used this billing cycle"}
+                          "help": "The average daily power used this billing cycle"}
 
     @staticmethod
     def _to_html(val, tags):
@@ -91,19 +95,26 @@ class MTU:
 
 class TedChecker:
     def __init__(self, config_file):
-        self.config = TedConfigFile(config_file)
+        self.config = config_file
         self.mtus = []
+
+    def get_data(self):
         live_data = "/api/LiveData.xml"
-        page = urllib2.urlopen("http://" + self.config.host + live_data).read()
-        tree = ET.fromstring(page)
-        for power in tree.iter("Power"):
-            for valid_mtu in TedConfigFile.MTU_NAMES:
-                for child in power.getchildren():
-                    if child.tag == valid_mtu:
-                        name = self.config.mtu_names[valid_mtu]
-                        if name != "":
-                            self.mtus.append(MTU(child, name))
-                        break
+        try:
+            url = urllib2.urlopen("http://" + self.config.host + live_data)
+            page = url.read()
+            tree = ET.fromstring(page)
+            for power in tree.iter("Power"):
+                for valid_mtu in TedConfigFile.MTU_NAMES:
+                    for child in power.getchildren():
+                        if child.tag == valid_mtu:
+                            name = self.config.mtu_names[valid_mtu]
+                            if name != "":
+                                self.mtus.append(MTU(child, name))
+                            break
+            return True
+        except:
+            return False
 
 
 def get_args():
@@ -112,16 +123,41 @@ def get_args():
                         help='Configuration file containing your username, password, and mint cookie')
     return parser.parse_args()
 
-if __name__ == "__main__":
-    args = get_args()
-    ted = TedChecker(args.config)
-    html = tags.html()
-    with html.add(tags.body()).add(tags.div(id='content')):
-        for mtu in ted.mtus:
-            mtu.to_html(tags)
-    with open("ted.html", 'w') as f:
-        f.write(str(html))
 
-    email_sender = EmailSender(ted.config.email_connection)
-    for user in ted.config.email_users:
-        email_sender.send(user, ted.config.email_subject, html)
+if __name__ == "__main__":
+    logger = logging.getLogger("tedChecker")
+    level = logging.WARN
+    logger.setLevel(level)
+    file_handler = logging.handlers.RotatingFileHandler("tedChecker.log", mode='a', maxBytes=10000, backupCount=5)
+    file_handler.setLevel(level)
+    formatter = logging.Formatter('%(asctime)s:%(levelname)s: %(message)s')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    logger.debug("Starting session")
+    args = get_args()
+    config = TedConfigFile(args.config)
+    try:
+        ted = TedChecker(config)
+        if ted.get_data():
+            html = tags.html()
+            with html.add(tags.body()).add(tags.div(id='content')):
+                for mtu in ted.mtus:
+                    mtu.to_html(tags)
+            with open("ted.html", 'w') as f:
+                f.write(str(html))
+        else:
+            message = "<html>Could not connect to " + config.host + ", please try rebooting the device.</html>"
+    except Exception as (e):
+        message = "<html>"
+        type_, value_, traceback_ = sys.exc_info()
+        tb = traceback.format_exception(type_, value_, traceback_)
+        for line in tb:
+            logger.critical(line)
+            message += line + "<br>"
+        message += "</html>"
+    email_sender = EmailSender(config.email_connection)
+    for user in config.email_users:
+        email_sender.send(user, config.email_subject, message)
