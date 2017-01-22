@@ -1,0 +1,1 @@
+python tedChecker.py --config ted.ini

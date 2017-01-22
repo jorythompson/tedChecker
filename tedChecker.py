@@ -148,6 +148,7 @@ if __name__ == "__main__":
                     mtu.to_html(tags)
             with open("ted.html", 'w') as f:
                 f.write(str(html))
+            message = str(html)
         else:
             message = "<html>Could not connect to " + config.host + ", please try rebooting the device.</html>"
     except Exception as (e):
